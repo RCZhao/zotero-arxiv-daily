@@ -9,8 +9,13 @@ def rerank_paper(candidate:list[ArxivPaper],corpus:list[dict],model:str='avsolat
     corpus = sorted(corpus,key=lambda x: datetime.strptime(x['data']['dateAdded'], '%Y-%m-%dT%H:%M:%SZ'),reverse=True)
     time_decay_weight = 1 / (1 + np.log10(np.arange(len(corpus)) + 1))
     time_decay_weight = time_decay_weight / time_decay_weight.sum()
-    corpus_feature = encoder.encode([paper['data']['abstractNote'] for paper in corpus])
-    candidate_feature = encoder.encode([paper.summary for paper in candidate])
+
+    # Combine title and abstract for richer embeddings
+    corpus_texts = [f"{paper['data']['title']}. {paper['data']['abstractNote']}" for paper in corpus]
+    candidate_texts = [f"{paper.title}. {paper.summary}" for paper in candidate]
+
+    corpus_feature = encoder.encode(corpus_texts)
+    candidate_feature = encoder.encode(candidate_texts)
     sim = encoder.similarity(candidate_feature,corpus_feature) # [n_candidate, n_corpus]
     scores = (sim * time_decay_weight).sum(axis=1) * 10 # [n_candidate]
     for s,c in zip(scores,candidate):

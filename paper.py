@@ -159,7 +159,7 @@ class ArxivPaper:
         return file_contents
     
     @cached_property
-    def tldr(self) -> str:
+    def tldr(self) -> dict:
         llm = get_llm()
         
         # Primary method: Use TeX source if available
@@ -213,7 +213,7 @@ class ArxivPaper:
                         ]
                     )
                     if tldr and tldr.strip():
-                        return tldr # Success with primary method
+                        return {'status': 'tex', 'content': tldr, 'lang': llm.lang}
                 except Exception as e:
                     logger.warning(f"Failed to generate TLDR for {self.arxiv_id} from TeX source: {e}. Falling back to abstract-based generation.")
 
@@ -245,20 +245,14 @@ class ArxivPaper:
             )
             
             if tldr and tldr.strip():
-                note = " (Generated from title and abstract only)"
-                if llm.lang.lower() == 'chinese':
-                    note = " (仅根据标题和摘要生成)"
-                return tldr.strip() + note
+                return {'status': 'abstract_ai', 'content': tldr.strip(), 'lang': llm.lang}
             else:
                 raise ValueError("LLM returned an empty or whitespace-only TLDR.")
 
         except Exception as e:
             # Final fallback: return the abstract itself
             logger.error(f"Failed to generate TLDR for {self.arxiv_id} from abstract: {e}. Returning abstract as TLDR.")
-            note = " (AI summary failed, showing abstract)"
-            if llm.lang.lower() == 'chinese':
-                note = " (AI摘要生成失败，显示原文摘要)"
-            return self.summary + note
+            return {'status': 'abstract_raw', 'content': self.summary, 'lang': llm.lang}
 
     @cached_property
     def affiliations(self) -> Optional[list[str]]:

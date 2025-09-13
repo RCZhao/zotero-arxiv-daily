@@ -13,6 +13,21 @@ framework = """
 <!DOCTYPE HTML>
 <html>
 <head>
+  <script>
+    MathJax = {
+      tex: {
+        inlineMath: [['$', '$'], ['\\(', '\\)']],
+        displayMath: [['$$', '$$'], ['\\[', '\\]']],
+        processEscapes: true
+      },
+      svg: {
+        fontCache: 'global'
+      }
+    };
+  </script>
+  <script type="text/javascript" id="MathJax-script" async
+    src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js">
+  </script>
   <style>
     .star-wrapper {
       font-size: 1.3em; /* 调整星星大小 */
@@ -59,8 +74,23 @@ def get_empty_html():
   """
   return block_template
 
-def get_block_html(title:str, authors:str, rate:str,arxiv_id:str, abstract:str, pdf_url:str, code_url:str=None, affiliations:str=None):
+def get_block_html(title:str, authors:str, rate:str,arxiv_id:str, tldr_data:dict, pdf_url:str, code_url:str=None, affiliations:str=None):
     code = f'<a href="{code_url}" style="display: inline-block; text-decoration: none; font-size: 14px; font-weight: bold; color: #fff; background-color: #5bc0de; padding: 8px 16px; border-radius: 4px; margin-left: 8px;">Code</a>' if code_url else ''
+    
+    tldr_content = tldr_data['content']
+    tldr_status = tldr_data['status']
+    lang = tldr_data.get('lang', 'english').lower()
+
+    if tldr_status == 'abstract_ai':
+        note_text = " (仅根据标题和摘要生成)" if 'chinese' in lang else " (Generated from title and abstract only)"
+        tldr_html = f'{tldr_content}<i style="color: #888; font-size: 0.9em; margin-left: 4px;">{note_text}</i>'
+    elif tldr_status == 'abstract_raw':
+        note_text = " (AI摘要生成失败，显示原文摘要)" if 'chinese' in lang else " (AI summary failed, showing abstract)"
+        # Use a light yellow background for the raw abstract to make it stand out.
+        tldr_html = f'<span style="background-color: #fff8e1; padding: 2px 4px; border-radius: 3px;">{tldr_content}</span><i style="color: #d9534f; font-size: 0.9em; margin-left: 4px;">{note_text}</i>'
+    else: # 'tex' status (default, high quality)
+        tldr_html = tldr_content
+
     block_template = """
     <table border="0" cellpadding="0" cellspacing="0" width="100%" style="font-family: Arial, sans-serif; border: 1px solid #ddd; border-radius: 8px; padding: 16px; background-color: #f9f9f9;">
     <tr>
@@ -87,7 +117,7 @@ def get_block_html(title:str, authors:str, rate:str,arxiv_id:str, abstract:str, 
     </tr>
     <tr>
         <td style="font-size: 14px; color: #333; padding: 8px 0;">
-            <strong>TLDR:</strong> {abstract}
+            <strong>TLDR:</strong> {tldr_html}
         </td>
     </tr>
 
@@ -99,7 +129,7 @@ def get_block_html(title:str, authors:str, rate:str,arxiv_id:str, abstract:str, 
     </tr>
 </table>
 """
-    return block_template.format(title=title, authors=authors,rate=rate,arxiv_id=arxiv_id, abstract=abstract, pdf_url=pdf_url, code=code, affiliations=affiliations)
+    return block_template.format(title=title, authors=authors,rate=rate,arxiv_id=arxiv_id, tldr_html=tldr_html, pdf_url=pdf_url, code=code, affiliations=affiliations)
 
 def get_stars(score:float):
     full_star = '<span class="full-star">⭐</span>'
@@ -139,7 +169,7 @@ def render_email(papers:list[ArxivPaper]):
                 affiliations += ', ...'
         else:
             affiliations = 'Unknown Affiliation'
-        parts.append(get_block_html(p.title, authors,rate,p.arxiv_id ,p.tldr, p.pdf_url, p.code_url, affiliations))
+        parts.append(get_block_html(p.title, authors,rate,p.arxiv_id, p.tldr, p.pdf_url, p.code_url, affiliations))
         time.sleep(10)
 
     content = '<br>' + '</br><br>'.join(parts) + '</br>'
