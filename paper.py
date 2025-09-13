@@ -160,95 +160,172 @@ class ArxivPaper:
     
     @cached_property
     def tldr(self) -> str:
-        introduction = ""
-        conclusion = ""
+        llm = get_llm()
+        
+        # Primary method: Use TeX source if available
         if self.tex is not None:
+            introduction = ""
+            conclusion = ""
             content = self.tex.get("all")
             if content is None:
                 content = "\n".join(self.tex.values())
-            #remove cite
+            
+            # Clean and extract
             content = re.sub(r'~?\\cite.?\{.*?\}', '', content)
-            #remove figure
             content = re.sub(r'\\begin\{figure\}.*?\\end\{figure\}', '', content, flags=re.DOTALL)
-            #remove table
             content = re.sub(r'\\begin\{table\}.*?\\end\{table\}', '', content, flags=re.DOTALL)
-            #find introduction and conclusion
-            # end word can be \section or \end{document} or \bibliography or \appendix
-            match = re.search(r'\\section\{Introduction\}.*?(\\section|\\end\{document\}|\\bibliography|\\appendix|$)', content, flags=re.DOTALL)
-            if match:
-                introduction = match.group(0)
-            match = re.search(r'\\section\{Conclusion\}.*?(\\section|\\end\{document\}|\\bibliography|\\appendix|$)', content, flags=re.DOTALL)
-            if match:
-                conclusion = match.group(0)
-        llm = get_llm()
-        prompt = """Given the title, abstract, introduction and the conclusion (if any) of a paper in latex format, generate a one-sentence TLDR summary in __LANG__:
+            intro_match = re.search(r'\\section\{Introduction\}.*?(\\section|\\end\{document\}|\\bibliography|\\appendix|$)', content, flags=re.DOTALL)
+            if intro_match:
+                introduction = intro_match.group(0)
+            concl_match = re.search(r'\\section\{Conclusion\}.*?(\\section|\\end\{document\}|\\bibliography|\\appendix|$)', content, flags=re.DOTALL)
+            if concl_match:
+                conclusion = concl_match.group(0)
+
+            # Only proceed if we have introduction
+            if introduction:
+                logger.debug(f"Generating TLDR for {self.arxiv_id} using TeX source.")
+                prompt = """Given the title, abstract, introduction and the conclusion (if any) of a paper in latex format, generate a one-sentence TLDR summary in __LANG__:
         
-        \\title{__TITLE__}
-        \\begin{abstract}__ABSTRACT__\\end{abstract}
-        __INTRODUCTION__
-        __CONCLUSION__
+                \\title{__TITLE__}
+                \\begin{abstract}__ABSTRACT__\\end{abstract}
+                __INTRODUCTION__
+                __CONCLUSION__
+                """
+                prompt = prompt.replace('__LANG__', llm.lang)
+                prompt = prompt.replace('__TITLE__', self.title)
+                prompt = prompt.replace('__ABSTRACT__', self.summary)
+                prompt = prompt.replace('__INTRODUCTION__', introduction)
+                prompt = prompt.replace('__CONCLUSION__', conclusion)
+
+                try:
+                    enc = tiktoken.encoding_for_model("gpt-4o")
+                    prompt_tokens = enc.encode(prompt)
+                    prompt_tokens = prompt_tokens[:4000]
+                    prompt = enc.decode(prompt_tokens)
+
+                    tldr = llm.generate(
+                        messages=[
+                            {
+                                "role": "system",
+                                "content": "You are an assistant who perfectly summarizes scientific paper, and gives the core idea of the paper to the user.",
+                            },
+                            {"role": "user", "content": prompt},
+                        ]
+                    )
+                    if tldr and tldr.strip():
+                        return tldr # Success with primary method
+                except Exception as e:
+                    logger.warning(f"Failed to generate TLDR for {self.arxiv_id} from TeX source: {e}. Falling back to abstract-based generation.")
+
+        # Fallback method: Use title and abstract
+        logger.debug(f"Generating TLDR for {self.arxiv_id} using title and abstract only.")
+        prompt = """Given the title and abstract of a paper, generate a one-sentence TLDR summary in __LANG__:
+    
+        Title: __TITLE__
+        Abstract: __ABSTRACT__
         """
         prompt = prompt.replace('__LANG__', llm.lang)
         prompt = prompt.replace('__TITLE__', self.title)
         prompt = prompt.replace('__ABSTRACT__', self.summary)
-        prompt = prompt.replace('__INTRODUCTION__', introduction)
-        prompt = prompt.replace('__CONCLUSION__', conclusion)
 
-        # use gpt-4o tokenizer for estimation
-        enc = tiktoken.encoding_for_model("gpt-4o")
-        prompt_tokens = enc.encode(prompt)
-        prompt_tokens = prompt_tokens[:4000]  # truncate to 4000 tokens
-        prompt = enc.decode(prompt_tokens)
-        
-        tldr = llm.generate(
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You are an assistant who perfectly summarizes scientific paper, and gives the core idea of the paper to the user.",
-                },
-                {"role": "user", "content": prompt},
-            ]
-        )
-        return tldr
-
-    @cached_property
-    def affiliations(self) -> Optional[list[str]]:
-        if self.tex is not None:
-            content = self.tex.get("all")
-            if content is None:
-                content = "\n".join(self.tex.values())
-            #search for affiliations
-            possible_regions = [r'\\author.*?\\maketitle',r'\\begin{document}.*?\\begin{abstract}']
-            matches = [re.search(p, content, flags=re.DOTALL) for p in possible_regions]
-            match = next((m for m in matches if m), None)
-            if match:
-                information_region = match.group(0)
-            else:
-                logger.debug(f"Failed to extract affiliations of {self.arxiv_id}: No author information found.")
-                return None
-            prompt = f"Given the author information of a paper in latex format, extract the affiliations of the authors in a python list format, which is sorted by the author order. If there is no affiliation found, return an empty list '[]'. Following is the author information:\n{information_region}"
-            # use gpt-4o tokenizer for estimation
+        try:
             enc = tiktoken.encoding_for_model("gpt-4o")
             prompt_tokens = enc.encode(prompt)
-            prompt_tokens = prompt_tokens[:4000]  # truncate to 4000 tokens
+            prompt_tokens = prompt_tokens[:4000]
             prompt = enc.decode(prompt_tokens)
-            llm = get_llm()
-            affiliations = llm.generate(
+
+            tldr = llm.generate(
                 messages=[
                     {
                         "role": "system",
-                        "content": "You are an assistant who perfectly extracts affiliations of authors from the author information of a paper. You should return a python list of affiliations sorted by the author order, like ['TsingHua University','Peking University']. If an affiliation is consisted of multi-level affiliations, like 'Department of Computer Science, TsingHua University', you should return the top-level affiliation 'TsingHua University' only. Do not contain duplicated affiliations. If there is no affiliation found, you should return an empty list [ ]. You should only return the final list of affiliations, and do not return any intermediate results.",
+                        "content": "You are an assistant who perfectly summarizes scientific paper, and gives the core idea of the paper to the user.",
                     },
                     {"role": "user", "content": prompt},
                 ]
             )
+            
+            if tldr and tldr.strip():
+                note = " (Generated from title and abstract only)"
+                if llm.lang.lower() == 'chinese':
+                    note = " (仅根据标题和摘要生成)"
+                return tldr.strip() + note
+            else:
+                raise ValueError("LLM returned an empty or whitespace-only TLDR.")
 
-            try:
-                affiliations = re.search(r'\[.*?\]', affiliations, flags=re.DOTALL).group(0)
-                affiliations = eval(affiliations)
-                affiliations = list(set(affiliations))
-                affiliations = [str(a) for a in affiliations]
-            except Exception as e:
-                logger.debug(f"Failed to extract affiliations of {self.arxiv_id}: {e}")
+        except Exception as e:
+            # Final fallback: return the abstract itself
+            logger.error(f"Failed to generate TLDR for {self.arxiv_id} from abstract: {e}. Returning abstract as TLDR.")
+            note = " (AI summary failed, showing abstract)"
+            if llm.lang.lower() == 'chinese':
+                note = " (AI摘要生成失败，显示原文摘要)"
+            return self.summary + note
+
+    @cached_property
+    def affiliations(self) -> Optional[list[str]]:
+        # First, try to extract from TeX source for higher accuracy
+        if self.tex is not None:
+            content = self.tex.get("all")
+            if content is None:
+                content = "\n".join(self.tex.values())
+            
+            # Search for author information in the TeX content
+            possible_regions = [r'\\author.*?\\maketitle', r'\\begin{document}.*?\\begin{abstract}']
+            matches = [re.search(p, content, flags=re.DOTALL) for p in possible_regions]
+            match = next((m for m in matches if m), None)
+            
+            if match:
+                information_region = match.group(0)
+                prompt = f"Given the author information of a paper in latex format, extract the affiliations of the authors in a python list format, which is sorted by the author order. If there is no affiliation found, return an empty list '[]'. Following is the author information:\n{information_region}"
+                
+                enc = tiktoken.encoding_for_model("gpt-4o")
+                prompt_tokens = enc.encode(prompt)
+                prompt_tokens = prompt_tokens[:4000]
+                prompt = enc.decode(prompt_tokens)
+                
+                llm = get_llm()
+                affiliations_str = llm.generate(
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": "You are an assistant who perfectly extracts affiliations of authors from the author information of a paper. You should return a python list of affiliations sorted by the author order, like ['TsingHua University','Peking University']. If an affiliation is consisted of multi-level affiliations, like 'Department of Computer Science, TsingHua University', you should return the top-level affiliation 'TsingHua University' only. Do not contain duplicated affiliations. If there is no affiliation found, you should return an empty list [ ]. You should only return the final list of affiliations, and do not return any intermediate results.",
+                        },
+                        {"role": "user", "content": prompt},
+                    ]
+                )
+
+                try:
+                    # Parse the LLM output
+                    affiliations_str = re.search(r'\[.*?\]', affiliations_str, flags=re.DOTALL).group(0)
+                    affiliations_list = eval(affiliations_str)
+                    affiliations_list = list(set(affiliations_list))
+                    affiliations_list = [str(a) for a in affiliations_list]
+                    if affiliations_list:
+                        logger.debug(f"Extracted affiliations for {self.arxiv_id} from TeX source.")
+                        return affiliations_list
+                except Exception as e:
+                    logger.debug(f"Failed to parse LLM output for affiliations of {self.arxiv_id} from TeX: {e}")
+            else:
+                logger.debug(f"Failed to find author region in TeX for {self.arxiv_id}.")
+
+        # Fallback to arXiv API data if TeX parsing fails or yields no results
+        logger.debug(f"Falling back to arXiv API for affiliations of {self.arxiv_id}.")
+        try:
+            # The arxiv library stores the raw feedparser entry in _raw
+            author_details = self._paper._raw.get('authors', [])
+            api_affiliations = []
+            for author in author_details:
+                if 'arxiv_affiliation' in author:
+                    # The affiliation text is in the 'term' key
+                    api_affiliations.append(author['arxiv_affiliation']['term'])
+            
+            if api_affiliations:
+                # Deduplicate and return
+                unique_affiliations = sorted(list(set(api_affiliations)))
+                logger.debug(f"Extracted affiliations for {self.arxiv_id} from API.")
+                return unique_affiliations
+            else:
+                logger.debug(f"No affiliation data found in arXiv API for {self.arxiv_id}.")
                 return None
-            return affiliations
+        except Exception as e:
+            logger.error(f"Error extracting affiliations from arXiv API for {self.arxiv_id}: {e}")
+            return None
