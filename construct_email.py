@@ -132,10 +132,16 @@ def render_email(papers:list[ArxivPaper]):
             authors = ', '.join(author_list)
         else:
             authors = ', '.join(author_list[:3] + ['...'] + author_list[-2:])
-        if p.affiliations is not None:
-            affiliations = p.affiliations[:5]
+        try:
+            paper_affiliations = p.affiliations
+        except Exception as e:
+            logger.warning(f"Failed to extract affiliations of {p.arxiv_id}: {e}")
+            paper_affiliations = None
+
+        if paper_affiliations is not None:
+            affiliations = paper_affiliations[:5]
             affiliations = ', '.join(affiliations)
-            if len(p.affiliations) > 5:
+            if len(paper_affiliations) > 5:
                 affiliations += ', ...'
         else:
             affiliations = 'Unknown Affiliation'
